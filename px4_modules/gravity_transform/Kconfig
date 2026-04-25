@@ -1,0 +1,5 @@
+menuconfig MODULES_GRAVITY_TRANSFORM
+	bool "gravity_transform"
+	default n
+	---help---
+		Real-time coordinate transformation module (out-of-tree).

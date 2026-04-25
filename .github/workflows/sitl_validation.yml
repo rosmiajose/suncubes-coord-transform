@@ -1,0 +1,56 @@
+name: SITL Validation Pipeline
+
+on: workflow_dispatch
+
+jobs:
+  sitl-validation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make cmake python3 python3-pip gcc g++ ninja-build libopencv-dev
+          pip3 install mavsdk numpy
+
+      - name: Clone PX4-Autopilot
+        run: |
+          git clone https://github.com/PX4/PX4-Autopilot.git --recursive --depth 1
+          cd PX4-Autopilot
+          bash ./Tools/setup/ubuntu.sh --no-sim-tools
+
+      - name: Install Gazebo Harmonic
+        run: |
+          sudo wget https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable jammy main" | sudo tee /etc/apt/sources.list.d/gazebo-stable.list
+          sudo apt-get update
+          sudo apt-get install -y gz-harmonic
+
+      - name: Build PX4 SITL (compile only)
+        run: |
+          cd PX4-Autopilot
+          HEADLESS=1 make -j2 px4_sitl_default
+
+      - name: Start SITL and run flight validation
+        timeout-minutes: 10
+        run: |
+          cd PX4-Autopilot
+          HEADLESS=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 PX4_GZ_WORLD=default ./build/px4_sitl_default/bin/px4 -d &
+          PX4_PID=$!
+          sleep 30
+          cd ../sitl_validation
+          python3 mission.py
+          RESULT=$?
+          kill $PX4_PID 2>/dev/null || true
+          exit $RESULT
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: px4-logs
+          path: PX4-Autopilot/build/px4_sitl_default/rootfs/log/

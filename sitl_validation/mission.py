@@ -68,12 +68,16 @@ async def main():
     # Charging Phase
     print(f"\n--- Charging Phase: hovering for {HOVER_DURATION}s ---")
     positions = []
+    attitudes = []
     start_time = time.time()
 
     while time.time() - start_time < HOVER_DURATION:
         await drone.offboard.set_position_ned(PositionNedYaw(TARGET_N, TARGET_E, TARGET_D, 0.0))
         async for pos in drone.telemetry.position_velocity_ned():
             positions.append((pos.position.north_m, pos.position.east_m, pos.position.down_m))
+            break
+        async for att in drone.telemetry.attitude_euler():
+            attitudes.append((att.roll_deg, att.pitch_deg, att.yaw_deg))
             break
         await asyncio.sleep(0.1)
 
@@ -111,6 +115,27 @@ async def main():
     print(f"Samples:   {len(positions)}")
     print(f"RMSE:      {rmse:.4f} m")
     print(f"Threshold: {RMSE_THRESHOLD} m")
+
+    if len(attitudes) > 0:
+        avg_roll = sum(a[0] for a in attitudes) / len(attitudes)
+        avg_pitch = sum(a[1] for a in attitudes) / len(attitudes)
+        max_roll = max(abs(a[0]) for a in attitudes)
+        max_pitch = max(abs(a[1]) for a in attitudes)
+        print(f"Attitude:  avg roll={avg_roll:.2f} deg, avg pitch={avg_pitch:.2f} deg")
+        print(f"           max roll={max_roll:.2f} deg, max pitch={max_pitch:.2f} deg")
+
+    # Crash detection: sudden altitude drop during hover
+    crashed = False
+    for i in range(1, len(positions)):
+        alt_prev = -positions[i-1][2]
+        alt_curr = -positions[i][2]
+        if alt_prev > 2.0 and alt_curr < 0.5:
+            crashed = True
+            break
+
+    if crashed:
+        print("RESULT: FAIL (crash detected — sudden altitude drop)")
+        sys.exit(1)
 
     if rmse > RMSE_THRESHOLD:
         print(f"RESULT: FAIL (RMSE {rmse:.4f}m exceeds {RMSE_THRESHOLD}m)")

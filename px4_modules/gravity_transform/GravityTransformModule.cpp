@@ -70,7 +70,8 @@ void GravityTransformModule::Run()
     }
 
     // Log results using PX4 logging system
-    PX4_INFO("g_body:[%.3f,%.3f,%.3f] recon:[%.3f,%.3f,%.3f] err:%.1e %s",
+    PX4_INFO("ts:%" PRIu64 " g_body:[%.3f,%.3f,%.3f] recon:[%.3f,%.3f,%.3f] err:%.1e %s",
+             att.timestamp,
              (double)g_body(0), (double)g_body(1), (double)g_body(2),
              (double)g_reconstructed(0), (double)g_reconstructed(1), (double)g_reconstructed(2),
              (double)reconstruction_error, ok ? "OK" : "FAIL");

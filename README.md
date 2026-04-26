@@ -4,8 +4,7 @@
 
 ### Overview
 
-This module runs inside PX4 and performs a simple but important check: it transforms the gravity vector between coordinate frames using live attitude data and verifies that the mathematical consistency is consistent across the whole process.
-This module is implemented as an out-of-tree module, so PX4 itself is not modified. This makes it easier to maintain and upgrade PX4 separately.
+This module runs inside PX4 and performs a simple but important check: it transforms the gravity vector between coordinate frames using live attitude data and verifies that the mathematical consistency is consistent across the whole process. It is implemented as an out-of-tree module, so PX4 itself is not modified. This makes it easier to maintain and upgrade PX4 separately.
 
 ### Architecture
 
@@ -51,9 +50,9 @@ We use `R^T` (transpose) instead of the general matrix inverse because for ortho
 
 **Validation checks (every cycle at 100 Hz):** Each cycle ensures three checks for accuracy:
 
-- Orthogonality: `||R · R^T - I||_F < 1e-5` - a valid rotation matrix R must be orthogonal, meaning it must equal the identity matrix I. We measure this using the Frobenius norm, which treats the 3×3 matrix as a 9-element vector and computes its Euclidean length. A result near zero confirms R is a valid rotation.
-- Norm preservation: `| ||g_b|| - ||g_w|| | < 1e-4` - rotation must not change a vector's magnitude. The length of gravity in the body frame must equal the length of gravity in the world frame (both should be 9.81 m/s²).
-- Reconstruction: `||ĝ_w - g_w|| < 1e-4` - after transforming gravity from world-to-body frame and back, the result must match the original. A non-zero error indicates numerical drift or a faulty rotation matrix.
+- **Orthogonality**: `||R · R^T - I||_F < 1e-5` - a valid rotation matrix R must be orthogonal, meaning R multiplied by its transpose R^T must equal the identity matrix I. We measure this using the Frobenius norm, which treats the 3×3 matrix as a 9-element vector and computes its Euclidean length. A result near zero confirms R is a valid rotation.
+- **Norm preservation**: `| ||g_b|| - ||g_w|| | < 1e-4` - rotation must not change a vector's magnitude. The length of gravity in the body frame must equal the length of gravity in the world frame (both should be 9.81 m/s²).
+- **Reconstruction**: `||ĝ_w - g_w|| < 1e-4` - after transforming gravity from world-to-body frame and back, the result must match the original. A non-zero error indicates numerical drift or a faulty rotation matrix.
 
 Thresholds are set 10–100× above expected float32 arithmetic errors to avoid false positives while catching genuine failures.
 
@@ -67,18 +66,23 @@ Thresholds are set 10–100× above expected float32 arithmetic errors to avoid 
 
 **Build steps:**
 
-1. Clone this repository:
+1. Clone this repository with submodules:
 ```bash
-git clone https://github.com/rosmiajose/suncubes-coord-transform.git
+git clone --recursive https://github.com/rosmiajose/suncubes-coord-transform.git
 ```
 
-2. Build PX4 SITL with the external module (no PX4 modifications needed):
+2. Install PX4 dependencies:
 ```bash
-cd ~/PX4-Autopilot
-HEADLESS=1 EXTERNAL_MODULES_LOCATION=~/suncubes-coord-transform/px4_modules make px4_sitl gz_x500
+cd suncubes-coord-transform/PX4-Autopilot
+bash ./Tools/setup/ubuntu.sh
 ```
 
-3. At the `pxh>` prompt:
+3. Build PX4 SITL with the external module (no PX4 modifications needed):
+```bash
+HEADLESS=1 EXTERNAL_MODULES_LOCATION=../px4_modules make px4_sitl gz_x500
+```
+
+4. At the `pxh>` prompt:
 ```bash
 gravity_transform start    # Start the module
 gravity_transform stop     # Stop the module
@@ -88,7 +92,7 @@ gravity_transform status   # Show module info
 
 **Expected output (vehicle level, 1 Hz logging):**
 ```
-INFO [gravity_transform] g_body:[-0.001,0.002,-9.810] recon:[0.000,0.000,-9.810] err:9.5e-07 OK
+INFO [gravity_transform] ts:130768000 g_body:[-0.001,0.002,-9.810] recon:[0.000,0.000,-9.810] err:9.5e-07 OK
 ```
 
 ---
@@ -99,29 +103,41 @@ INFO [gravity_transform] g_body:[-0.001,0.002,-9.810] recon:[0.000,0.000,-9.810]
 
 An automated SITL flight validation pipeline that executes a complete flight mission and validates the vehicle's control stability during a simulated "laser charging" hover phase.
 
-### Why RMSE Matters for Laser Power Transfer
+**Note:** Task 2 is fully independent of Task 1 — the flight validation pipeline does not use the gravity_transform module. 
+
+### Why RMSE (Root Mean Square Error) Matters for Laser Power Transfer
 
 In SunCubes LUCY, a high-power laser beam must remain aligned with an onboard receiver on the UAV. Position drift during hover directly impacts power transfer:
 
-- Beam divergence means power density drops with distance from beam center
-- A 0.5m position error at typical operating distances can reduce received power significantly
-- Excessive oscillation risks the beam missing the receiver entirely, causing safety hazards
-- RMSE captures both systematic offset and random oscillation in a single metric
+- Beam divergence means power density drops with distance from the beam centre, missing the drone's receiver. 
+- A 0.5m (physical tolerance threshold set to 0.5m) position error at typical operating distances can reduce received power significantly.
+- Excessive oscillation risks the beam missing the receiver entirely, causing safety hazards.
+- RMSE captures both systematic offset (consistent drift from the target) and random oscillation (wobbling around the target) in a single metric. A higher RMSE indicates the drone is not holding its position precisely enough for safe laser power transfer.
 
 The 0.5m threshold represents the maximum acceptable position error for maintaining safe and efficient power transfer during the charging window.
 
+**RMSE Calculation:**
+
+`RMSE = √(1/N × Σ(pi - pref)²)`
+
+Where `pi` is the drone's actual position at sample `i`, `pref` is the target hover position, and `N` is the total number of samples collected during the 30-second charging phase. The script records position at ~10 Hz, giving approximately 300 samples.
+
+The 0.5m threshold represents the maximum acceptable position error for maintaining safe and efficient power transfer during the charging window. The tested result of **RMSE = 0.0298m** (approximately 3 centimetres) demonstrates excellent hover stability, well within the required tolerance.
+
 ### Flight Mission Script (mission.py)
 
-The script uses **Python MAVSDK** to interface with a PX4 SITL instance and performs:
+The script uses **Python MAVSDK** to interface with a PX4 SITL instance. MAVSDK was chosen for its reliable async API that handles heartbeat management, mode switching, and health checks automatically, which are essential for robust CI/CD automation where manual intervention is not possible.
 
-1. Connects to PX4 SITL and waits for global position estimate
+1. Connects to PX4 SITL and waits for the global position estimate (system ready)
 2. Sets OFFBOARD mode with position setpoints
 3. Arms the vehicle
 4. Takes off to 10m altitude
-5. **Charging Phase:** Hovers at target coordinate `(0, 0, -10)` NED for 30 seconds, recording position at ~10 Hz
+5. **Charging Phase:** Hovers at target coordinate `(0, 0, -10)` NED for 30 seconds, recording both position and attitude at ~10 Hz
 6. Lands and waits for disarm
 7. Computes RMSE of recorded positions vs target setpoint
-8. Exits with code 0 (PASS) if RMSE < 0.5m, or code 1 (FAIL) otherwise
+8. Checks for crashes (sudden altitude drops during hover)
+9. Reports attitude statistics (average and maximum roll/pitch)
+10. Exits with code 0 (PASS) if RMSE < 0.5m and no crash, or code 1 (FAIL) otherwise
 
 **Tested locally: RMSE = 0.0298m — PASS**
 
@@ -136,7 +152,7 @@ The `.github/workflows/sitl_validation.yml` file defines the CI/CD pipeline:
 5. Fails the build if RMSE exceeds 0.5m or a crash is detected
 6. Uploads PX4 logs as artifacts on failure for debugging
 
-Note: The pipeline is set to manual trigger (`workflow_dispatch`) as PX4 SITL builds require more resources than GitHub's free-tier runners typically provide.
+**Note**: The pipeline is set to manual trigger (`workflow_dispatch`) as PX4 SITL builds require more resources than GitHub's free-tier runners typically provide. In a real setup, this would typically run on a self-hosted runner. 
 
 ### Running SITL Validation Locally
 
@@ -144,12 +160,13 @@ Note: The pipeline is set to manual trigger (`workflow_dispatch`) as PX4 SITL bu
 
 - PX4-Autopilot built with SITL support
 - Python MAVSDK installed: `pip3 install mavsdk`
+- **Note:** The assignment specifies the Baylands world (`gz_x500_baylands`). Both local testing and the CI pipeline use the default world due to resource constraints. The hover stability validation is independent of the world geometry as it depends only on the flight controller's performance.
 
 **Steps:**
 
 Terminal 1 — Start SITL:
 ```bash
-cd ~/PX4-Autopilot
+cd suncubes-coord-transform/PX4-Autopilot
 HEADLESS=1 make px4_sitl gz_x500
 ```
 

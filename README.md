@@ -4,7 +4,8 @@
 
 ### Overview
 
-A PX4 out-of-tree module that performs real-time coordinate transformations on the gravity vector using live vehicle attitude data, and validates mathematical consistency every cycle. The module requires zero modifications to the PX4 source tree.
+This module runs inside PX4 and performs a simple but important check: it transforms the gravity vector between coordinate frames using live attitude data and verifies that the mathematical consistency is consistent across the whole process.
+This module is implemented as an out-of-tree module, so PX4 itself is not modified. This makes it easier to maintain and upgrade PX4 separately.
 
 ### Architecture
 
@@ -14,7 +15,7 @@ Each `Run()` cycle:
 
 1. Checks for new `vehicle_attitude` data via `uORB::Subscription::update()`
 2. If no new data, returns immediately (non-blocking)
-3. Extracts the quaternion and builds the rotation matrix R (DCM)
+3. If new data is available, it extracts the quaternion and builds the rotation matrix R (DCM - Direction Cosine Matrix)
 4. Transforms gravity from world to body frame: `g_b = R * g_w`
 5. Reconstructs via inverse: `g_hat_w = R^T * g_b`
 6. Validates orthogonality, norm preservation, and reconstruction accuracy
@@ -22,37 +23,37 @@ Each `Run()` cycle:
 
 **Design decisions:**
 
-- **ScheduledWorkItem over raw thread:** PX4 work queues handle scheduling, priority, and stack management. No benefit to a custom thread for periodic sensor processing.
-- **Non-blocking:** `update()` returns false immediately if no new data. No busy-waiting or blocking operations.
-- **Temporal consistency:** All math within one `Run()` uses data from a single `vehicle_attitude` message with one timestamp. No cross-timestep data mixing.
-- **RTOS determinism:** Constant computational load per cycle (3 matrix operations, 3 scalar comparisons). Bounded, predictable execution time.
+- **ScheduledWorkItem over raw thread:** Used 'ScheduledWorkItem' instead of a custom thread because PX4 already provides a work queue that handles scheduling, priority, timing and stack management. For this kind of periodic task, a separate thread didn't add any benefit. 
+- **Non-blocking:** `update()` returns false immediately, exiting if no new data. No busy-waiting or blocking operations. This prevents unnecessary CPU usage and maintains system responsiveness. 
+- **Temporal consistency and Synchronization:** All math computations within one `Run()` uses data from a single `vehicle_attitude` message with one attitude timestamp. No cross-timestep data mixing. 
+- **RTOS determinism:** Constant computational load per cycle (3 matrix operations, 3 scalar comparisons). Achieves predictable execution, which is important for real-time systems.
 - **Out-of-tree:** Module lives entirely outside PX4's source tree, built via `EXTERNAL_MODULES_LOCATION`. This allows clean PX4 version upgrades without merge conflicts.
 
 ### Mathematical Approach
 
-**Reference Frames:**
+**Reference Frames:** PX4 uses:
 
 - World frame: NED (North-East-Down) — PX4's standard inertial frame
 - Body frame: FRD (Front-Right-Down) — attached to the vehicle
 
 **Rotation Representation:**
 
-PX4 provides orientation as a unit quaternion `q = [w, x, y, z]` in `vehicle_attitude`. We convert to a Direction Cosine Matrix (DCM) `R`, a 3×3 orthogonal matrix with `det(R) = +1`.
+PX4 provides orientation as a unit quaternion `q = [w, x, y, z]` in `vehicle_attitude`. We convert the quaternion to a Direction Cosine Matrix (DCM) `R`, which is a 3×3 orthogonal matrix with `det(R) = +1`, that confirms R is a proper rotation (not a reflection), guaranteed by construction since R is derived from a unit quaternion.
 
 **Transformations:**
 
 - Forward (world → body): `g_b(t) = R(t) · g_w`
 - Inverse (body → world): `ĝ_w(t) = R^T(t) · g_b(t)`
 
-We use `R^T` (transpose) instead of general matrix inverse because for orthogonal matrices `R^(-1) = R^T` by definition. This is O(1) and avoids numerical issues of general matrix inversion.
+We use `R^T` (transpose) instead of the general matrix inverse because for orthogonal matrices `R^(-1) = R^T` by definition. This is O(1) and avoids the numerical issues associated with general matrix inversion.
 
-**Gravity vector** as defined in the assignment: `g_w = [0, 0, -9.81] m/s²`
+**Gravity vector** as defined in the assignment: `g_w = [0, 0, -9.81] `
 
-**Validation checks (every cycle at 100 Hz):**
+**Validation checks (every cycle at 100 Hz):** Each cycle ensures three checks for accuracy:
 
-- Orthogonality: `||R · R^T - I||_F < 1e-5` (Frobenius norm)
-- Norm preservation: `| ||g_b|| - ||g_w|| | < 1e-4`
-- Reconstruction: `||ĝ_w - g_w|| < 1e-4`
+- Orthogonality: `||R · R^T - I||_F < 1e-5` - a valid rotation matrix R must be orthogonal, meaning it must equal the identity matrix I. We measure this using the Frobenius norm, which treats the 3×3 matrix as a 9-element vector and computes its Euclidean length. A result near zero confirms R is a valid rotation.
+- Norm preservation: `| ||g_b|| - ||g_w|| | < 1e-4` - rotation must not change a vector's magnitude. The length of gravity in the body frame must equal the length of gravity in the world frame (both should be 9.81 m/s²).
+- Reconstruction: `||ĝ_w - g_w|| < 1e-4` - after transforming gravity from world-to-body frame and back, the result must match the original. A non-zero error indicates numerical drift or a faulty rotation matrix.
 
 Thresholds are set 10–100× above expected float32 arithmetic errors to avoid false positives while catching genuine failures.
 
@@ -83,6 +84,7 @@ gravity_transform start    # Start the module
 gravity_transform stop     # Stop the module
 gravity_transform status   # Show module info
 ```
+**Note:** The module logs at 1 Hz. To stop it, type `gravity_transform stop` at the pxh> prompt (the command will execute even if log output is visible), or press Ctrl+C to exit PX4 entirely.
 
 **Expected output (vehicle level, 1 Hz logging):**
 ```

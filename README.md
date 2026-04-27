@@ -219,6 +219,7 @@ RESULT: PASS (RMSE 0.0299m within 0.5m)
 
 ```
 suncubes-coord-transform/
+├── PX4-Autopilot/                              # PX4 firmware (submodule)
 ├── px4_modules/
 │   ├── CMakeLists.txt                          # Out-of-tree entry point
 │   └── gravity_transform/

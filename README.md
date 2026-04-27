@@ -178,20 +178,39 @@ python3 mission.py
 
 **Expected output:**
 ```
+============================================================
 SunCubes SITL Validation - Charging Phase Stability Test
+============================================================
 Connecting to drone...
+Waiting for drone to connect...
 Connected!
 Waiting for global position estimate...
 Global position OK
-OFFBOARD mode set
+Setting initial offboard setpoint...
+Starting offboard mode...
+Offboard started
+Arming...
 Armed!
 Taking off to 10.0m...
+Current altitude: 9.9m
+
 --- Charging Phase: hovering for 30s ---
 Collected 244 samples
+
 Landing...
-Landed and disarmed
-RMSE: 0.0298 m
-RESULT: PASS (RMSE 0.0298m within 0.5m)
+Waiting for landing...
+Disarmed (landed)
+
+============================================================
+Performance Analysis
+============================================================
+Target:    (0.0, 0.0, -10.0)
+Samples:   244
+RMSE:      0.0299 m
+Threshold: 0.5 m
+Attitude:  avg roll=-0.01 deg, avg pitch=0.01 deg
+           max roll=0.30 deg, max pitch=0.26 deg
+RESULT: PASS (RMSE 0.0299m within 0.5m)
 ```
 
 ---
